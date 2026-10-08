@@ -88,10 +88,21 @@ function decodeLine(gray,threshold){
     if(startScore>1.9)continue;
     const values=[]; let pos=i;
     for(let guard=0;guard<110&&pos+5<r.length;guard++){
+      // Code 128 STOP is the only symbol with 7 run widths.
+      if(pos+7<=r.length){
+        const stopRuns=r.slice(pos,pos+7);
+        const stopScore=errScore(stopRuns,[2,3,3,1,1,1,2]);
+        if(stopScore<=2.0){
+          values.push(STOP);
+          pos+=7;
+          break;
+        }
+      }
+
       const six=r.slice(pos,pos+6), best=bestPattern(six,0);
       if(!best||best.score>2.0)break;
-      values.push(best.v); pos+=6;
-      if(best.v===STOP)break;
+      values.push(best.v);
+      pos+=6;
     }
     if(values.length<4||values[0]!==START_B||values[values.length-1]!==STOP)continue;
     const data=values.slice(1,-2), check=values[values.length-2];
