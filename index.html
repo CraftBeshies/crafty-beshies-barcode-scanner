@@ -5,144 +5,132 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Crafty Beshies Barcode Scanner</title>
 <style>
-:root{--pink:#ffcbe1;--lav:#dcccec;--text:#51455a;--muted:#806f83}
+:root{--pink:#ffcbe1;--lav:#dcccec;--text:#51455a;--muted:#806f83;--green:#d6e5bd}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;padding:20px;background:linear-gradient(135deg,#fff7fb,#f4eff9);font-family:Arial,sans-serif;color:var(--text);display:flex;justify-content:center;align-items:center}
 .card{width:min(560px,100%);background:#fff;border-radius:24px;padding:22px;box-shadow:0 10px 30px rgba(80,60,90,.14)}
-h1{margin:0 0 8px;font-size:24px}p{color:var(--muted);line-height:1.45}
+h1{margin:0 0 8px;font-size:24px}
+p{color:var(--muted);line-height:1.45}
 .video-wrap{position:relative;background:#111;border-radius:18px;overflow:hidden;aspect-ratio:4/3;margin:18px 0 14px}
 video{width:100%;height:100%;object-fit:cover;display:block}
 .line{position:absolute;left:10%;right:10%;top:50%;height:3px;background:#ff8fbe;box-shadow:0 0 8px rgba(255,143,190,.8)}
 .status,.result{padding:12px 14px;border-radius:14px;background:#f7f1f6;color:var(--muted);font-size:14px;min-height:44px}
-.result{display:none;background:#eef7ea;color:#51455a;font-weight:700}
+.result{display:none;background:var(--green);color:var(--text);font-weight:700}
 button{width:100%;min-height:48px;border:0;border-radius:14px;font-weight:700;font-size:16px;cursor:pointer;background:var(--lav);color:var(--text)}
-.small{font-size:12px}canvas{display:none}
+.small{font-size:12px}
 </style>
 </head>
 <body>
 <main class="card">
 <h1>📷 Crafty Beshies Barcode Scanner</h1>
 <p>Point the camera at a Crafty Beshies <strong>Code 128</strong> product barcode. The scanner reads Product IDs such as <strong>CB028</strong>.</p>
-<div class="video-wrap"><video id="preview" autoplay muted playsinline></video><div class="line"></div></div>
-<canvas id="frame"></canvas>
-<div id="status" class="status" aria-live="polite">Starting camera…</div>
-<div id="result" class="result"></div>
-<button id="closeBtn" type="button" style="margin-top:12px">Close Scanner</button>
-<p class="small">This scanner has no external barcode-library dependency. Camera access requires HTTPS and browser permission.</p>
+
+<div class="video-wrap">
+  <video id="preview" autoplay muted playsinline></video>
+  <div class="line"></div>
+</div>
+
+<div id="status" class="status" aria-live="polite">Loading barcode scanner…</div>
+<div id="result" class="result" aria-live="polite"></div>
+<button id="restartBtn" type="button" style="margin-top:12px">🔄 Restart Scanner</button>
+
+<p class="small">ZXing is hosted locally in this GitHub repository. No barcode-library CDN is required.</p>
 </main>
+
+<!-- These two files will be generated into the repository by the GitHub Action. -->
+<script src="vendor/zxing-library.min.js"></script>
+<script src="vendor/zxing-browser.min.js"></script>
+
 <script>
 (function(){
-const PATTERNS=["212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213", "221312", "231212", "112232", "122132", "122231", "113222", "123122", "123221", "223211", "221132", "221231", "213212", "223112", "312131", "311222", "321122", "321221", "312212", "322112", "322211", "212123", "212321", "232121", "111323", "131123", "131321", "112313", "132113", "132311", "211313", "231113", "231311", "112133", "112331", "132131", "113123", "113321", "133121", "313121", "211331", "231131", "213113", "213311", "213131", "311123", "311321", "331121", "312113", "312311", "332111", "314111", "221411", "431111", "111224", "111422", "121124", "121421", "141122", "141221", "112214", "112412", "122114", "122411", "142112", "142211", "241211", "221114", "413111", "241112", "134111", "111242", "121142", "121241", "114212", "124112", "124211", "411212", "421112", "421211", "212141", "214121", "412121", "111143", "111341", "131141", "114113", "114311", "411113", "411311", "113141", "114131", "311141", "411131", "211412", "211214", "211232", "2331112"];
-const START_B=104, STOP=106;
-const video=document.getElementById('preview'), canvas=document.getElementById('frame'), ctx=canvas.getContext('2d',{willReadFrequently:true});
-const status=document.getElementById('status'), result=document.getElementById('result'), closeBtn=document.getElementById('closeBtn');
-let stream=null, timer=null, done=false, busy=false;
-const params=new URLSearchParams(location.search), returnUrl=params.get('returnUrl')||'';
+  const video = document.getElementById('preview');
+  const status = document.getElementById('status');
+  const resultBox = document.getElementById('result');
+  const restartBtn = document.getElementById('restartBtn');
 
-function setStatus(s){status.textContent=s}
-function stop(){if(timer){clearInterval(timer);timer=null} if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}}
-function closeScanner(){stop();if(window.opener&&!window.opener.closed)window.close();else history.back()}
-function finish(code){if(done)return;done=true;stop();result.style.display='block';result.textContent='Scanned: '+code;setStatus('Barcode found.');if(returnUrl){try{const u=new URL(returnUrl);u.searchParams.set('barcode',code);location.href=u.toString()}catch(e){}}}
+  let controls = null;
+  let starting = false;
+  let lastText = '';
 
-function runs(bits){
-  const out=[]; let last=bits[0], n=1;
-  for(let i=1;i<bits.length;i++){if(bits[i]===last)n++;else{out.push(n);last=bits[i];n=1}}
-  out.push(n); return out;
-}
-function mergeTiny(a){
-  const x=a.slice();
-  for(let pass=0;pass<2;pass++){
-    for(let i=0;i<x.length;i++){
-      if(x[i]<=1 && x.length>3){
-        if(i===0){x[1]+=x[0];x.shift();i--}
-        else if(i===x.length-1){x[i-1]+=x[i];x.pop()}
-        else if(x[i-1]<=x[i+1]){x[i-1]+=x[i];x.splice(i,1);i--}
-        else{x[i+1]+=x[i];x.splice(i,1);i--}
-      }
+  function setStatus(message){
+    status.textContent = message;
+  }
+
+  function showResult(text){
+    resultBox.style.display = 'block';
+    resultBox.textContent = '✅ Barcode detected: ' + text;
+  }
+
+  function stopScanner(){
+    try {
+      if (controls && typeof controls.stop === 'function') controls.stop();
+    } catch(e) {}
+    controls = null;
+  }
+
+  async function startScanner(){
+    if (starting) return;
+    starting = true;
+    stopScanner();
+    resultBox.style.display = 'none';
+    lastText = '';
+
+    if (!window.ZXing) {
+      setStatus('❌ ZXing core library was not loaded.');
+      starting = false;
+      return;
     }
-  }
-  return x;
-}
-function errScore(actual, expected){
-  const sa=actual.reduce((a,b)=>a+b,0), se=expected.reduce((a,b)=>a+b,0);
-  const scale=sa/se; let e=0;
-  for(let i=0;i<expected.length;i++){const d=actual[i]-expected[i]*scale;e+=d*d}
-  return Math.sqrt(e/expected.length)/Math.max(1,scale);
-}
-function bestPattern(widths,start){
-  if(widths.length<6)return null; let best=null;
-  for(let v=start;v<107;v++){
-    const p=PATTERNS[v]; if(p.length!==6)continue;
-    const s=errScore(widths.slice(0,6),p);
-    if(!best||s<best.score)best={v,score:s};
-  }
-  return best;
-}
-function decodeLine(gray,threshold){
-  const bits=new Array(gray.length);
-  for(let i=0;i<gray.length;i++)bits[i]=gray[i]<threshold?1:0;
-  let r=mergeTiny(runs(bits));
-  for(let i=0;i<=r.length-8;i++){
-    const first=r.slice(i,i+6);
-    const startScore=errScore(first,[2,1,1,2,1,4]);
-    if(startScore>1.9)continue;
-    const values=[]; let pos=i;
-    for(let guard=0;guard<110&&pos+5<r.length;guard++){
-      // Code 128 STOP is the only symbol with 7 run widths.
-      if(pos+7<=r.length){
-        const stopRuns=r.slice(pos,pos+7);
-        const stopScore=errScore(stopRuns,[2,3,3,1,1,1,2]);
-        if(stopScore<=2.0){
-          values.push(STOP);
-          pos+=7;
-          break;
+    if (!window.ZXingBrowser) {
+      setStatus('❌ ZXing browser library was not loaded.');
+      starting = false;
+      return;
+    }
+
+    try {
+      setStatus('Starting camera…');
+
+      const Reader = window.ZXingBrowser.BrowserMultiFormatReader;
+      if (!Reader) throw new Error('BrowserMultiFormatReader is unavailable.');
+
+      const codeReader = new Reader();
+
+      const devices = await window.ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+      if (!devices || !devices.length) throw new Error('No camera was found.');
+
+      // Prefer a rear/environment camera on phones/tablets.
+      let selected = devices.find(d =>
+        /back|rear|environment/i.test(d.label || '')
+      ) || devices[devices.length - 1];
+
+      setStatus('📷 Camera ready — point it at CB028.');
+
+      controls = await codeReader.decodeFromVideoDevice(
+        selected.deviceId,
+        video,
+        (decoded, error) => {
+          if (decoded) {
+            const text = decoded.getText();
+            if (text && text !== lastText) {
+              lastText = text;
+              showResult(text);
+              setStatus('🎉 Successfully decoded the barcode.');
+              // Stop after the first successful read for this test.
+              stopScanner();
+            }
+          }
         }
-      }
+      );
 
-      const six=r.slice(pos,pos+6), best=bestPattern(six,0);
-      if(!best||best.score>2.0)break;
-      values.push(best.v);
-      pos+=6;
-    }
-    if(values.length<4||values[0]!==START_B||values[values.length-1]!==STOP)continue;
-    const data=values.slice(1,-2), check=values[values.length-2];
-    let sum=START_B;
-    for(let j=0;j<data.length;j++)sum+=data[j]*(j+1);
-    if(sum%103!==check)continue;
-    let text='';
-    for(const v of data){if(v<96)text+=String.fromCharCode(v+32);else return null}
-    if(!/^CB\d{3,}$/i.test(text))continue;
-    return text;
-  }
-  return null;
-}
-function tryFrame(){
-  if(done||busy||!video.videoWidth)return; busy=true;
-  const w=Math.min(960,video.videoWidth), h=Math.round(w*video.videoHeight/video.videoWidth);
-  canvas.width=w;canvas.height=h;ctx.drawImage(video,0,0,w,h);
-  const ys=[Math.round(h*.42),Math.round(h*.47),Math.round(h*.50),Math.round(h*.53),Math.round(h*.58)];
-  for(const y of ys){
-    const band=ctx.getImageData(0,Math.max(0,y-3),w,7).data, gray=[];
-    for(let x=0;x<w;x++){
-      let sum=0;for(let yy=0;yy<7;yy++){const k=(yy*w+x)*4;sum+=0.299*band[k]+0.587*band[k+1]+0.114*band[k+2]}
-      gray.push(sum/7);
-    }
-    for(const t of [80,100,120,140,160,180]){
-      const code=decodeLine(gray,t);
-      if(code){finish(code);busy=false;return}
+    } catch(err) {
+      console.error(err);
+      setStatus('❌ Scanner error: ' + (err && err.message ? err.message : String(err)));
+    } finally {
+      starting = false;
     }
   }
-  busy=false;
-}
-async function start(){
-  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){setStatus('This browser cannot provide camera access on this page.');return}
-  try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
-    video.srcObject=stream;await video.play();setStatus('Camera ready. Point it at the CB barcode…');
-    timer=setInterval(tryFrame,180);
-  }catch(e){setStatus('Camera error ('+(e?.name||'UnknownError')+'): '+(e?.message||String(e)))}
-}
-closeBtn.addEventListener('click',closeScanner);start();
+
+  restartBtn.addEventListener('click', startScanner);
+  window.addEventListener('load', startScanner);
 })();
 </script>
 </body>
