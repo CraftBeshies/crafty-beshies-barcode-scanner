@@ -114,8 +114,31 @@ button{width:100%;min-height:48px;border:0;border-radius:14px;font-weight:700;fo
               lastText = text;
               showResult(text);
               setStatus('🎉 Successfully decoded the barcode.');
-              // Stop after the first successful read for this test.
+              // Stop after the first successful read.
               stopScanner();
+
+              // If Owner Product Management launched this scanner,
+              // return the scanned Product ID to the Owner Portal.
+              const params = new URLSearchParams(window.location.search);
+              const returnUrl = params.get('returnUrl');
+
+              if (returnUrl) {
+                try {
+                  const target = new URL(returnUrl);
+
+                  // Only allow an Apps Script web-app return URL.
+                  if (!/^(script\.google\.com|script\.googleusercontent\.com)$/i.test(target.hostname)) {
+                    throw new Error('Invalid return URL.');
+                  }
+
+                  target.searchParams.set('barcode', text);
+                  target.searchParams.set('scanSource', 'external');
+                  window.location.href = target.toString();
+                  return;
+                } catch (e) {
+                  console.error('Unable to return to Owner Portal:', e);
+                }
+              }
             }
           }
         }
